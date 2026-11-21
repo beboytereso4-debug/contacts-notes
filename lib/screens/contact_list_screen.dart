@@ -4,6 +4,8 @@ import '../db/database_helper.dart';
 import '../models/contact.dart';
 import 'contact_form_screen.dart';
 
+enum _ContactFilter { all, favorites }
+
 class ContactListScreen extends StatefulWidget {
   const ContactListScreen({super.key});
 
@@ -17,6 +19,16 @@ class _ContactListScreenState extends State<ContactListScreen> {
 
   List<Contact> _contacts = [];
   bool _loading = true;
+  _ContactFilter _filter = _ContactFilter.all;
+
+  int get _favoriteCount => _contacts.where((contact) => contact.isFavorite).length;
+
+  List<Contact> get _visibleContacts {
+    if (_filter == _ContactFilter.favorites) {
+      return _contacts.where((contact) => contact.isFavorite).toList();
+    }
+    return _contacts;
+  }
 
   @override
   void initState() {
@@ -49,23 +61,25 @@ class _ContactListScreenState extends State<ContactListScreen> {
 
   Future<void> _toggleFavorite(Contact contact) async {
     await _db.update(contact.copyWith(isFavorite: !contact.isFavorite));
-    _loadContacts();
+    await _loadContacts();
   }
 
   Future<void> _delete(Contact contact) async {
     await _db.delete(contact.id!);
-    setState(() => _contacts.removeWhere((c) => c.id == contact.id));
-
     if (!mounted) return;
+    setState(() => _contacts.removeWhere((item) => item.id == contact.id));
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('${contact.name} deleted'),
+          content: Text('${contact.name} was deleted'),
+          behavior: SnackBarBehavior.floating,
           action: SnackBarAction(
             label: 'UNDO',
             onPressed: () async {
-              await _db.insert(contact);
+              // Insert a fresh row; SQLite assigns a new ID.
+              await _db.insert(contact.copyWith(id: null));
               _loadContacts();
             },
           ),
@@ -75,88 +89,486 @@ class _ContactListScreenState extends State<ContactListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final visibleContacts = _visibleContacts;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Contacts')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: SearchBar(
-              controller: _searchController,
-              hintText: 'Search name, phone or email',
-              leading: const Icon(Icons.search),
-              onChanged: (_) => _loadContacts(),
-              trailing: [
-                if (_searchController.text.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.clear),
-                    onPressed: () {
-                      _searchController.clear();
-                      _loadContacts();
-                    },
-                  ),
-              ],
-            ),
+      appBar: AppBar(
+        title: const Text(
+          'Contacts Book',
+          style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -0.4),
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh contacts',
+            onPressed: _loadContacts,
+            icon: const Icon(Icons.refresh_rounded),
           ),
-          Expanded(child: _buildBody()),
+          const SizedBox(width: 8),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openForm(),
-        child: const Icon(Icons.person_add),
+        icon: const Icon(Icons.person_add_alt_1_rounded),
+        label: const Text('Add contact'),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: CustomScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 18),
+                    sliver: SliverToBoxAdapter(
+                      child: _buildOverview(),
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    sliver: SliverToBoxAdapter(
+                      child: SearchBar(
+                        controller: _searchController,
+                        hintText: 'Search name, phone or email',
+                        leading: const Icon(Icons.search_rounded),
+                        elevation: const WidgetStatePropertyAll(0),
+                        backgroundColor:
+                            const WidgetStatePropertyAll(Colors.white),
+                        padding: const WidgetStatePropertyAll(
+                          EdgeInsets.symmetric(horizontal: 16),
+                        ),
+                        shape: WidgetStatePropertyAll(
+                          RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            side: const BorderSide(color: Color(0xFFE7E9F1)),
+                          ),
+                        ),
+                        onChanged: (_) => _loadContacts(),
+                        trailing: [
+                          if (_searchController.text.isNotEmpty)
+                            IconButton(
+                              tooltip: 'Clear search',
+                              icon: const Icon(Icons.close_rounded),
+                              onPressed: () {
+                                _searchController.clear();
+                                _loadContacts();
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                    sliver: SliverToBoxAdapter(
+                      child: Row(
+                        children: [
+                          _filterChip(
+                            label: 'All contacts',
+                            selected: _filter == _ContactFilter.all,
+                            onTap: () => setState(
+                              () => _filter = _ContactFilter.all,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          _filterChip(
+                            label: 'Favorites',
+                            selected: _filter == _ContactFilter.favorites,
+                            icon: Icons.star_rounded,
+                            onTap: () => setState(
+                              () => _filter = _ContactFilter.favorites,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '${visibleContacts.length} ${visibleContacts.length == 1 ? 'contact' : 'contacts'}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: const Color(0xFF777D91)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_loading)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (visibleContacts.isEmpty)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _buildEmptyState(),
+                    )
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                      sliver: SliverList.separated(
+                        itemCount: visibleContacts.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final contact = visibleContacts[index];
+                          return _buildContactCard(contact);
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildBody() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_contacts.isEmpty) {
-      return Center(
-        child: Text(
-          _searchController.text.isEmpty
-              ? 'No contacts yet.\nTap + to add one.'
-              : 'No matches found.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodyLarge,
-        ),
-      );
-    }
-    return ListView.builder(
-      itemCount: _contacts.length,
-      itemBuilder: (context, index) {
-        final contact = _contacts[index];
-        return Dismissible(
-          key: ValueKey(contact.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: Colors.red,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 24),
-            child: const Icon(Icons.delete, color: Colors.white),
-          ),
-          onDismissed: (_) => _delete(contact),
-          child: ListTile(
-            leading: CircleAvatar(
-              child: Text(contact.name.isEmpty ? '?' : contact.name[0].toUpperCase()),
-            ),
-            title: Text(contact.name),
-            subtitle: Text(
-              contact.email.isEmpty ? contact.phone : '${contact.phone}\n${contact.email}',
-            ),
-            isThreeLine: contact.email.isNotEmpty,
-            trailing: IconButton(
-              icon: Icon(
-                contact.isFavorite ? Icons.star : Icons.star_border,
-                color: contact.isFavorite ? Colors.amber : null,
+  Widget _buildOverview() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Stay connected.',
+          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                letterSpacing: -1,
+                color: const Color(0xFF20243A),
               ),
-              onPressed: () => _toggleFavorite(contact),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          'Keep the people who matter close.',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF777D91),
+              ),
+        ),
+        const SizedBox(height: 18),
+        Row(
+          children: [
+            Expanded(
+              child: _statCard(
+                icon: Icons.people_alt_rounded,
+                label: 'Total contacts',
+                value: '${_contacts.length}',
+                color: const Color(0xFF4056A1),
+              ),
             ),
-            onTap: () => _openForm(contact),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _statCard(
+                icon: Icons.star_rounded,
+                label: 'Favorites',
+                value: '$_favoriteCount',
+                color: const Color(0xFFE4A52D),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _statCard({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFEDEFF5).withValues(alpha: .9)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .10),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(icon, color: color, size: 21),
           ),
-        );
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF777D91),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    IconData? icon,
+  }) {
+    return ChoiceChip(
+      selected: selected,
+      onSelected: (_) => onTap(),
+      avatar: icon == null
+          ? null
+          : Icon(icon, size: 17, color: selected ? Colors.white : null),
+      label: Text(label),
+      showCheckmark: false,
+      labelStyle: TextStyle(
+        color: selected ? Colors.white : const Color(0xFF555B70),
+        fontWeight: FontWeight.w600,
+        fontSize: 13,
+      ),
+      selectedColor: const Color(0xFF4056A1),
+      backgroundColor: Colors.white,
+      side: BorderSide(
+        color: selected ? const Color(0xFF4056A1) : const Color(0xFFE7E9F1),
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+    );
+  }
+
+  Widget _buildContactCard(Contact contact) {
+    final initials = contact.name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .take(2)
+        .map((part) => part[0].toUpperCase())
+        .join();
+
+    return Dismissible(
+      key: ValueKey(contact.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 22),
+        decoration: BoxDecoration(
+          color: const Color(0xFFD94B4B),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: const Icon(Icons.delete_outline_rounded, color: Colors.white),
+      ),
+      confirmDismiss: (_) async {
+        return await showDialog<bool>(
+              context: context,
+              builder: (dialogContext) => AlertDialog(
+                title: const Text('Delete contact?'),
+                content: Text('Remove ${contact.name} from your contacts?'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFD94B4B),
+                    ),
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    child: const Text('Delete'),
+                  ),
+                ],
+              ),
+            ) ??
+            false;
       },
+      onDismissed: (_) => _delete(contact),
+      child: Card(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => _openForm(contact),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundColor: const Color(0xFFE9EDFA),
+                  child: Text(
+                    initials.isEmpty ? '?' : initials,
+                    style: const TextStyle(
+                      color: Color(0xFF4056A1),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        contact.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          color: Color(0xFF252A3D),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.phone_outlined,
+                            size: 14,
+                            color: Color(0xFF858B9D),
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              contact.phone,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF777D91),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (contact.email.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.mail_outline_rounded,
+                              size: 14,
+                              color: Color(0xFF858B9D),
+                            ),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                contact.email,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF777D91),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: contact.isFavorite
+                      ? 'Remove from favorites'
+                      : 'Add to favorites',
+                  onPressed: () => _toggleFavorite(contact),
+                  icon: Icon(
+                    contact.isFavorite
+                        ? Icons.star_rounded
+                        : Icons.star_outline_rounded,
+                    color: contact.isFavorite
+                        ? const Color(0xFFE4A52D)
+                        : const Color(0xFF9AA0B0),
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFFB0B4C1),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    final isSearching = _searchController.text.trim().isNotEmpty;
+    final isFavorites = _filter == _ContactFilter.favorites;
+
+    final title = isSearching
+        ? 'No matches found'
+        : isFavorites
+            ? 'No favorite contacts yet'
+            : 'Your contacts start here';
+
+    final message = isSearching
+        ? 'Try another name, phone number or email.'
+        : isFavorites
+            ? 'Tap the star on a contact to save it here.'
+            : 'Add your first contact to keep important details in one place.';
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(36, 24, 36, 80),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE9EDFA),
+                borderRadius: BorderRadius.circular(25),
+              ),
+              child: Icon(
+                isSearching ? Icons.search_off_rounded : Icons.people_outline,
+                size: 36,
+                color: const Color(0xFF4056A1),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF252A3D),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                height: 1.5,
+                color: Color(0xFF777D91),
+              ),
+            ),
+            if (!isSearching && !isFavorites) ...[
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () => _openForm(),
+                icon: const Icon(Icons.person_add_alt_1_rounded),
+                label: const Text('Add your first contact'),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
