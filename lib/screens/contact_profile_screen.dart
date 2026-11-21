@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -72,6 +73,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
               title: const Text('Choose from gallery'),
               onTap: () => Navigator.pop(sheetContext, 'gallery'),
             ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.pop(sheetContext, 'camera'),
+            ),
             if (_contact.photoPath != null)
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.red),
@@ -103,16 +109,16 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
 
     try {
       setState(() => _changingPhoto = true);
+      final source =
+          choice == 'camera' ? ImageSource.camera : ImageSource.gallery;
       final picked = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
+        source: source,
         imageQuality: 88,
         maxWidth: 1200,
         maxHeight: 1200,
       );
       if (picked == null || !mounted) return;
 
-      // Keep a private app copy so the photo remains available after restart
-      // and even if the original gallery item is moved or deleted.
       final appDirectory = await getApplicationDocumentsDirectory();
       final photoDirectory =
           Directory(path.join(appDirectory.path, 'contact_photos'));
@@ -161,8 +167,25 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
     }
   }
 
+  Future<void> _copyValue(String label, String value) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('$label copied to clipboard'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final hasPhoto = _contact.photoPath != null &&
+        _contact.photoPath!.isNotEmpty &&
+        File(_contact.photoPath!).existsSync();
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
@@ -202,21 +225,19 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
                           radius: 48,
                           backgroundColor:
                               Theme.of(context).colorScheme.surface,
-                          backgroundImage: _contact.photoPath != null &&
-                                  File(_contact.photoPath!).existsSync()
+                          backgroundImage: hasPhoto
                               ? FileImage(File(_contact.photoPath!))
                               : null,
-                          child: _contact.photoPath == null ||
-                                  !File(_contact.photoPath!).existsSync()
-                              ? Text(
+                          child: hasPhoto
+                              ? null
+                              : Text(
                                   _initials.isEmpty ? '?' : _initials,
                                   style: const TextStyle(
                                     color: Color(0xFF4056A1),
                                     fontSize: 25,
                                     fontWeight: FontWeight.w800,
                                   ),
-                                )
-                              : null,
+                                ),
                         ),
                         Positioned(
                           right: -2,
@@ -356,12 +377,16 @@ class _ContactProfileScreenState extends State<ContactProfileScreen> {
               ],
             ),
           ),
-          Icon(
-            icon == Icons.phone_outlined
-                ? Icons.content_copy_rounded
-                : Icons.alternate_email_rounded,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-            size: 18,
+          IconButton(
+            tooltip: 'Copy $label',
+            onPressed: () => _copyValue(label, value),
+            icon: Icon(
+              icon == Icons.phone_outlined
+                  ? Icons.content_copy_rounded
+                  : Icons.alternate_email_rounded,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              size: 18,
+            ),
           ),
         ],
       ),
