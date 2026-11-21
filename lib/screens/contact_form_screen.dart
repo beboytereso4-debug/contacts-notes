@@ -50,6 +50,8 @@ class _ContactFormScreenState extends State<ContactFormScreen> {
       phone: _phone.text.trim(),
       email: _email.text.trim(),
       isFavorite: _isFavorite,
+      createdAt: widget.contact?.createdAt,
+      photoPath: widget.contact?.photoPath,
     );
 
     try {
