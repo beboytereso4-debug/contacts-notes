@@ -6,6 +6,29 @@ import 'contact_form_screen.dart';
 
 enum _ContactFilter { all, favorites }
 
+enum _ContactSort { nameAsc, nameDesc, newest, oldest }
+
+extension on _ContactSort {
+  String get label {
+    switch (this) {
+      case _ContactSort.nameAsc:
+        return 'Name (A–Z)';
+      case _ContactSort.nameDesc:
+        return 'Name (Z–A)';
+      case _ContactSort.newest:
+        return 'Date added (newest)';
+      case _ContactSort.oldest:
+        return 'Date added (oldest)';
+    }
+  }
+
+  IconData get icon => switch (this) {
+        _ContactSort.nameAsc || _ContactSort.nameDesc => Icons.sort_by_alpha_rounded,
+        _ContactSort.newest => Icons.arrow_downward_rounded,
+        _ContactSort.oldest => Icons.arrow_upward_rounded,
+      };
+}
+
 class ContactListScreen extends StatefulWidget {
   const ContactListScreen({super.key});
 
@@ -20,6 +43,7 @@ class _ContactListScreenState extends State<ContactListScreen> {
   List<Contact> _contacts = [];
   bool _loading = true;
   _ContactFilter _filter = _ContactFilter.all;
+  _ContactSort _sort = _ContactSort.nameAsc;
 
   int get _favoriteCount => _contacts.where((contact) => contact.isFavorite).length;
 
@@ -43,7 +67,13 @@ class _ContactListScreenState extends State<ContactListScreen> {
   }
 
   Future<void> _loadContacts() async {
-    final contacts = await _db.getContacts(query: _searchController.text);
+    final contacts = await _db.getContacts(
+      query: _searchController.text,
+      sortBy: (_sort == _ContactSort.newest || _sort == _ContactSort.oldest)
+          ? 'date'
+          : 'name',
+      descending: _sort == _ContactSort.nameDesc || _sort == _ContactSort.newest,
+    );
     if (!mounted) return;
     setState(() {
       _contacts = contacts;
@@ -181,6 +211,47 @@ class _ContactListScreenState extends State<ContactListScreen> {
                             ),
                           ),
                           const Spacer(),
+                          PopupMenuButton<_ContactSort>(
+                            tooltip: 'Sort contacts',
+                            initialValue: _sort,
+                            onSelected: (value) {
+                              setState(() => _sort = value);
+                              _loadContacts();
+                            },
+                            itemBuilder: (context) => _ContactSort.values
+                                .map((sort) => PopupMenuItem<_ContactSort>(
+                                      value: sort,
+                                      child: Row(
+                                        children: [
+                                          Icon(sort.icon, size: 18),
+                                          const SizedBox(width: 10),
+                                          Text(sort.label),
+                                          if (_sort == sort) ...[
+                                            const SizedBox(width: 8),
+                                            const Icon(Icons.check_rounded, size: 18),
+                                          ],
+                                        ],
+                                      ),
+                                    ))
+                                .toList(),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                border: Border.all(color: const Color(0xFFE7E9F1)),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.sort_rounded, size: 17),
+                                  const SizedBox(width: 5),
+                                  Text('Sort', style: Theme.of(context).textTheme.labelMedium),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
                           Text(
                             '${visibleContacts.length} ${visibleContacts.length == 1 ? 'contact' : 'contacts'}',
                             style: Theme.of(context).textTheme.bodySmall
